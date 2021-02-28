@@ -1,8 +1,6 @@
 #include <stdio.h>
 #include <unistd.h>
 #include <stdint.h>
-#include <stdbool.h>
-#include <fcntl.h>   // required for open
 
 typedef uint_fast8_t uf8;
 
