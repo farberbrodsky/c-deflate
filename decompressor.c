@@ -8,7 +8,8 @@ typedef uint_fast8_t uf8;
 // second bit (0b10) - whether this is the end
 inline static uf8 read_bit(int src_fd, size_t *bit_index, uf8 *curr_byte) {
     uf8 mod = 7 - (*bit_index) % 8;
-    uf8 result = *curr_byte & (1 << mod);
+    uf8 result = ((*curr_byte) & 0b10000000) != 0;
+    *curr_byte = (*curr_byte) << 1;
     ++(*bit_index);
     if (mod == 0) {
         // read from next byte
@@ -17,7 +18,7 @@ inline static uf8 read_bit(int src_fd, size_t *bit_index, uf8 *curr_byte) {
             return result | 0b10;
         }
     }
-    return !(result == 0);
+    return result;
 }
 
 int decompressor(int dest_fd, int src_fd) {
