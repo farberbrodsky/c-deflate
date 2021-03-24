@@ -1,70 +1,85 @@
-#include "decompressor.h"
+#include "decompressor2.h"
 
-typedef uint_fast8_t uf8;
-typedef uint_fast16_t uf16;
+#define MAX_CODEBITS 15   // a huffman code can't be more than 15 bits
+#define MAX_CODES    286  // there are only 286 codes encoded
 
-// first bit  (0b01) - the real bit
-// second bit (0b10) - whether this is the end
-inline static uf8 read_bit(int src_fd, size_t *bit_index, uf8 *curr_byte) {
-    uf8 mod = 7 - (*bit_index) % 8;
-    uf8 result = ((*curr_byte) & 0b10000000) != 0;
-    *curr_byte = (*curr_byte) << 1;
-    ++(*bit_index);
-    if (mod == 0) {
-        // read from next byte
-        if (read(src_fd, curr_byte, 1) == 0) {
-            // couldn't read anything
-            return result | 0b10;
+struct state {
+    FILE *dest;
+    FILE *src;
+    int bit_buf;   // bit buffer
+    int bit_count; // number of bits in bit buffer
+    jmp_buf except;
+};
+
+static int bits(struct state *s, int count) {
+    long val = s->bit_buf;
+    while (s->bit_count < count) {
+        // read 8 more bits
+        unsigned char eight_bits = 0;
+        if (fread(&eight_bits, 1, 1, s->src) != 1) {
+            // failed to read
+            longjmp(s->except, ERR_INVALID_DEFLATE);
         }
+        val |= (long)(eight_bits) << s->bit_count;
+        s->bit_count += 8;
     }
-    return result;
+
+    // remove count bits from buffer
+    s->bit_buf = (int)(val >> count);
+    s->bit_count -= count;
+
+    // return the first count bits
+    return (int)(val & ((1L << count) - 1));
 }
 
-static uf8 read_byte(int src_fd, size_t *bit_index, uf8 *curr_byte) {
-    uf8 result = 0;
-    for (uf8 i = 0; i < 8; ++i) {
-        result = result << 1;
-        result |= read_bit(src_fd, bit_index, curr_byte) & 0b01;
+static void non_compressed_block(struct state *s) {
+    // read big-endian 16 bit number for length, and then nlen (one's complement of len)
+    unsigned int block_length = be16toh(bits(s, 16));
+    unsigned int block_nlen   = be16toh(bits(s, 16));
+#ifdef DEFLATE_DEBUGGING
+    printf("non-compressed block: %u bytes\n", block_length);
+#endif
+    // TODO: check that nlen is one's complement of len
+    // read block_length bytes
+    for (unsigned int i = 0; i < block_length; i++) {
+        int byte = bits(s, 8);
+        fwrite(&byte, 1, 1, s->dest);
     }
-    return result;
 }
 
-int decompressor(int dest_fd, int src_fd) {
-    size_t bit_index = 0;
-    uf8 curr_byte;
-    read(src_fd, &curr_byte, 1);
-
-    uf8 final_block = 0;
-    while (!final_block) {
+int decompressor(FILE *dest, FILE *src) {
+    struct state s;
+    s.src = src;
+    s.dest = dest;
+    s.bit_buf = 0;
+    s.bit_count = 0;
+    
+    int exception = setjmp(s.except);
+    if (exception != 0) {
+        return exception;
+    } else {
+        // decompress block by block
+        int is_last = 0;
         // first bit - whether this is the final block
-        final_block = read_bit(src_fd, &bit_index, &curr_byte);
-        // read the next two bytes, which are block type
-        uf8 type_1 = read_bit(src_fd, &bit_index, &curr_byte) & 0b01;
-        uf8 type_2 = read_bit(src_fd, &bit_index, &curr_byte) & 0b01;
-        if (!type_1 && !type_2) {
-            // no compression, read the amount of bytes in this block
-            uf8 first_byte  = read_byte(src_fd, &bit_index, &curr_byte);
-            uf8 second_byte = read_byte(src_fd, &bit_index, &curr_byte);
-            uf16 len = (first_byte << 8) + second_byte;
-            len = be16toh(len); // read from big endian
-            // TODO: check that nlen is actually the complement to 1
-            read_byte(src_fd, &bit_index, &curr_byte);
-            read_byte(src_fd, &bit_index, &curr_byte);
-            // now read len bytes
-            printf("non-compressed, %d bytes block\n", (int)len);
-            for (uint_fast32_t i = 0; i < len; ++i) {
-                uf8 byte = read_byte(src_fd, &bit_index, &curr_byte);
-                write(dest_fd, &byte, 1);
+        while (is_last == 0) {
+            is_last = bits(&s, 1);
+            // next 2 bits - whether this block is non-compressed, static huffman or dynamic huffman
+            int block_type = bits(&s, 2);
+            switch (block_type) {
+                case 0b00:
+                    // non-compressed
+                    non_compressed_block(&s);
+                    break;
+                case 0b01:
+                    // static huffman
+                    break;
+                case 0b10:
+                    // dynamic huffman
+                    break;
+                default:
+                    // invalid!
+                    return 1;
             }
-        } else if (!type_1 && type_2) {
-            // fixed Huffman codes
-            printf("fixed Hufffman codes\n");
-        } else if (type_1 && !type_2) {
-            // dynamic Huffman codes
-            printf("dynamic Hufffman codes\n");
-        } else {
-            // reserved (error)
-            return ERR_INVALID_DEFLATE;
         }
     }
     return 0;
