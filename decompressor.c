@@ -83,15 +83,18 @@ static struct huffman *huffman_construct(int *lengths, int count) {
 
     // generate the huffman tree
     struct huffman *tree = calloc(1, sizeof(struct huffman));
-    for (int i = 0; i <= count; i++) {
+    for (int i = 0; i < count; i++) {
         int code_len = lengths[i];
         if (code_len != 0) {
-            int code = next_code[code_len]++;
+            uint16_t code = next_code[code_len]++;
             // we know the code, now we just need to put it on the tree
             struct huffman *node = tree;
             // read code bit by bit
-            while (code != 0) {
-                if (code & 1) {
+            bool found_first_bit = false;
+            code <<= (16 - lengths[i]);
+            for (int j = 0; j < lengths[i]; j++) {
+                if (code & 0b1000000000000000) {
+                    found_first_bit = true;
                     // go right
                     if (node->right == NULL) {
                         node->right = calloc(1, sizeof(struct huffman));
@@ -104,13 +107,27 @@ static struct huffman *huffman_construct(int *lengths, int count) {
                     }
                     node = node->left;
                 }
-                code >>= 1;
+                code <<= 1;
             }
             node->value = i;
         }
     }
     return tree;
 }
+
+#ifdef DEFLATE_DEBUGGING
+static void huffman_print(struct huffman *huff) {
+    if (huff == NULL) {
+        printf("NULL");
+    } else {
+        printf("Huff%d(L: ", huff->value);
+        huffman_print(huff->left);
+        printf(", R: ");
+        huffman_print(huff->right);
+        printf(")");
+    }
+}
+#endif
 
 static void dynamic_huffman_block(struct state *s) {
     int hlit = 257 + bits(s, 5); // number of Literal/Length codes - 257-286
