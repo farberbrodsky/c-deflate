@@ -1,5 +1,5 @@
 #include "decompressor.h"
 
 int main() {
-    decompressor(stdout, stdin);
+    return decompressor(stdout, stdin);
 }
