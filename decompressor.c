@@ -115,6 +115,19 @@ static struct huffman *huffman_construct(int *lengths, int count) {
     return tree;
 }
 
+// Reads the next character according to a huffman code
+static int huffman_read_next(struct huffman *huff, struct state *s) {
+    while (huff->left || huff->right) {
+        int bit = bits(s, 1);
+        if (bit) {
+            huff = huff->right;
+        } else {
+            huff = huff->left;
+        }
+    }
+    return huff->value;
+}
+
 #ifdef DEFLATE_DEBUGGING
 static void huffman_print(struct huffman *huff) {
     if (huff == NULL) {
@@ -134,12 +147,70 @@ static void dynamic_huffman_block(struct state *s) {
     int hdist =  1 + bits(s, 5); // number of Distance codes - 1-32
     int hclen =  4 + bits(s, 4); // number of Code Length codes - 4-19
     // code length repeat codes can cross from HLIT+257 to HDIST+1, so we have a sequence of HLIT+257+HDIST+1 code lengths.
-    int *code_lengths = malloc(sizeof(int) * (hlit + hdist + 258));
+    int code_lengths[19];
     for (int i = 0; i < (hclen + 4); i++) {
         // read the 3-bit code length
         code_lengths[i] = bits(s, 3);
     }
-    // distance codes' huffman is encoded with the code length Huffman code
+    // for some reason, the order of the code lengths is not sorted
+    // so we need to reorder it before constructing our huffman tree
+    int code_lengths_ordered[] = {16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15};
+    for (int i = 0; i < hclen + 4; i++) {
+        code_lengths_ordered[i] = code_lengths[code_lengths_ordered[i]];
+    }
+    struct huffman *code_lengths_huff = huffman_construct(code_lengths_ordered, hclen + 4);
+
+    // read huffman for literal/length alphabet
+    int *dist_and_lit_huffman_lengths = malloc((hlit + hdist) * sizeof(int));
+    for (int i = 0; i < hlit + hdist; i++) {
+        int code_length = huffman_read_next(code_lengths_huff, s);
+        if (code_length <= 15) {
+            // length code of 0-15
+            dist_and_lit_huffman_lengths[i] = code_length;
+        } else if (code_length == 16) {
+            // copy previous 3-6 times, 2 extra bits
+            int repeat_length = 3 + bits(s, 2);
+
+            if (i == 0) {
+                // this could have been a segfault! sheesh
+                free(dist_and_lit_huffman_lengths);
+                huffman_free(code_lengths_huff);
+                longjmp(s->except, ERR_INVALID_DEFLATE);
+            }
+
+            int repeat_this = dist_and_lit_huffman_lengths[i - 1];
+            for (int j = 0; j < repeat_length; ++j) {
+                dist_and_lit_huffman_lengths[i++] = repeat_this;
+            }
+            --i; // that was 1 too many
+        } else if (code_length == 17) {
+            // repeat 0 for 3-10 times
+            int repeat_length = 3 + bits(s, 3);
+            for (int j = 0; j < repeat_length; ++j) {
+                dist_and_lit_huffman_lengths[i++] = 0;
+            }
+            --i; // that was 1 too many
+        } else {
+            // repeat 0 for 11-138 times
+            int repeat_length = 11 + bits(s, 7);
+            for (int j = 0; j < repeat_length; ++j) {
+                dist_and_lit_huffman_lengths[i++] = 0;
+            }
+            --i; // that was 1 too many
+        }
+    }
+    huffman_free(code_lengths_huff);
+    // construct literal and distance huffman codes
+    struct huffman *literal_huff = huffman_construct(dist_and_lit_huffman_lengths, hlit);
+    struct huffman *distnce_huff = huffman_construct(dist_and_lit_huffman_lengths, hdist);
+#ifdef DEFLATE_DEBUGGING
+    printf("Dynamic Huffman\n");
+    huffman_print(literal_huff);
+    huffman_print(distnce_huff);
+#endif
+    // TODO: actually use these huffman codes
+    huffman_free(literal_huff);
+    huffman_free(distnce_huff);
 }
 
 int decompressor(FILE *dest, FILE *src) {
@@ -167,9 +238,16 @@ int decompressor(FILE *dest, FILE *src) {
                     break;
                 case 0b01:
                     // static huffman
+#ifdef DEFLATE_DEBUGGING
+                    printf("static huffman block\n");
+#endif
                     break;
                 case 0b10:
                     // dynamic huffman
+#ifdef DEFLATE_DEBUGGING
+                    printf("dynamic huffman block\n");
+#endif
+                    dynamic_huffman_block(&s);
                     break;
                 default:
                     // invalid!
