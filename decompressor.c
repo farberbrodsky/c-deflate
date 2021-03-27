@@ -131,13 +131,13 @@ static int huffman_read_next(struct huffman *huff, struct state *s) {
 #ifdef DEFLATE_DEBUGGING
 static void huffman_print(struct huffman *huff) {
     if (huff == NULL) {
-        printf("NULL");
+        printf("null");
     } else {
-        printf("Huff%d(L: ", huff->value);
+        printf("{\"val\": %d, \"L\": ", huff->value);
         huffman_print(huff->left);
-        printf(", R: ");
+        printf(", \"R\": ");
         huffman_print(huff->right);
-        printf(")");
+        printf("}");
     }
 }
 #endif
@@ -146,21 +146,21 @@ static void dynamic_huffman_block(struct state *s) {
     int hlit = 257 + bits(s, 5); // number of Literal/Length codes - 257-286
     int hdist =  1 + bits(s, 5); // number of Distance codes - 1-32
     int hclen =  4 + bits(s, 4); // number of Code Length codes - 4-19
-    // code length repeat codes can cross from HLIT+257 to HDIST+1, so we have a sequence of HLIT+257+HDIST+1 code lengths.
     int code_lengths[19];
-    for (int i = 0; i < (hclen + 4); i++) {
+    for (int i = 0; i < hclen; i++) {
         // read the 3-bit code length
         code_lengths[i] = bits(s, 3);
     }
     // for some reason, the order of the code lengths is not sorted
     // so we need to reorder it before constructing our huffman tree
     int code_lengths_ordered[] = {16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15};
-    for (int i = 0; i < hclen + 4; i++) {
+    for (int i = 0; i < hclen; i++) {
         code_lengths_ordered[i] = code_lengths[code_lengths_ordered[i]];
     }
-    struct huffman *code_lengths_huff = huffman_construct(code_lengths_ordered, hclen + 4);
+    struct huffman *code_lengths_huff = huffman_construct(code_lengths_ordered, hclen);
 
     // read huffman for literal/length alphabet
+    // code length repeat codes can cross from HLIT+257 to HDIST+1, so we have a sequence of HLIT+257+HDIST+1 code lengths.
     int *dist_and_lit_huffman_lengths = malloc((hlit + hdist) * sizeof(int));
     for (int i = 0; i < hlit + hdist; i++) {
         int code_length = huffman_read_next(code_lengths_huff, s);
@@ -203,11 +203,7 @@ static void dynamic_huffman_block(struct state *s) {
     // construct literal and distance huffman codes
     struct huffman *literal_huff = huffman_construct(dist_and_lit_huffman_lengths, hlit);
     struct huffman *distnce_huff = huffman_construct(dist_and_lit_huffman_lengths, hdist);
-#ifdef DEFLATE_DEBUGGING
-    printf("Dynamic Huffman\n");
-    huffman_print(literal_huff);
-    huffman_print(distnce_huff);
-#endif
+    free(dist_and_lit_huffman_lengths);
     // TODO: actually use these huffman codes
     huffman_free(literal_huff);
     huffman_free(distnce_huff);
