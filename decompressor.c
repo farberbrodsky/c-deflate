@@ -171,7 +171,10 @@ static void read_with_huffman(struct huffman *literal_huff, struct huffman *dist
             write_byte(literal, s);
         } else {
             int repeat_len;
-            if (literal <= 268) {
+            if (literal <= 264) {
+                // 0 extra bits
+                repeat_len = (literal - 257) + 3;
+            } else if (literal <= 268) {
                 // 1 extra bit
                 repeat_len = ((literal - 265) * 2 + 11) + bits(s, 1);
             } else if (literal <= 272) {
