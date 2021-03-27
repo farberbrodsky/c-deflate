@@ -45,7 +45,6 @@ static void write_byte(unsigned char byte, struct state *s) {
 }
 
 static void write_repeat(int length, int distance, struct state *s) {
-    //printf("\nrepeat len %d distance %d\n", length, distance);
     if (s->out_buf_index < distance) {
         // this could have been a segfault! sheesh
         longjmp(s->except, ERR_INVALID_DEFLATE);
@@ -53,7 +52,6 @@ static void write_repeat(int length, int distance, struct state *s) {
     for (int i = 0; i < length; i++) {
         write_byte(s->out_buf[s->out_buf_index - distance], s);
     }
-    //printf("\nend\n");
 }
 
 static void non_compressed_block(struct state *s) {
