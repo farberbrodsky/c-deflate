@@ -6,8 +6,10 @@
 struct state {
     FILE *dest;
     FILE *src;
-    int bit_buf;   // bit buffer
-    int bit_count; // number of bits in bit buffer
+    int bit_buf;                  // bit buffer
+    int bit_count;                // number of bits in bit buffer
+    unsigned char out_buf[65536]; // used for repetitions
+    int out_buf_index;            // index in out_buf
     jmp_buf except;
 };
 
@@ -32,6 +34,26 @@ static int bits(struct state *s, int count) {
     return (int)(bit_buf & ((1L << count) - 1));
 }
 
+static void write_byte(unsigned char byte, struct state *s) {
+    fwrite(&byte, 1, 1, s->dest);
+    if (s->out_buf_index == 65535) {
+        // move everything 32768 bytes
+        memmove(s->out_buf, s->out_buf + 32768, 32768);
+        s->out_buf_index -= 32768;
+    }
+    s->out_buf[s->out_buf_index++] = byte;
+}
+
+static void write_repeat(int length, int distance, struct state *s) {
+    if (s->out_buf_index < distance) {
+        // this could have been a segfault! sheesh
+        longjmp(s->except, ERR_INVALID_DEFLATE);
+    }
+    for (int i = 0; i < length; i++) {
+        write_byte(s->out_buf[s->out_buf_index++ - distance], s);
+    }
+}
+
 static void non_compressed_block(struct state *s) {
     // read big-endian 16 bit number for length, and then nlen (one's complement of len)
     unsigned int block_length = be16toh(bits(s, 16));
@@ -43,7 +65,7 @@ static void non_compressed_block(struct state *s) {
     // read block_length bytes
     for (unsigned int i = 0; i < block_length; i++) {
         int byte = bits(s, 8);
-        fwrite(&byte, 1, 1, s->dest);
+        write_byte(byte, s);
     }
 }
 
@@ -160,7 +182,7 @@ static void dynamic_huffman_block(struct state *s) {
     struct huffman *code_lengths_huff = huffman_construct(code_lengths_ordered, hclen);
 
     // read huffman for literal/length alphabet
-    // code length repeat codes can cross from HLIT+257 to HDIST+1, so we have a sequence of HLIT+257+HDIST+1 code lengths.
+    // code length repeat codes can cross from hlit to hdist
     int *dist_and_lit_huffman_lengths = malloc((hlit + hdist) * sizeof(int));
     for (int i = 0; i < hlit + hdist; i++) {
         int code_length = huffman_read_next(code_lengths_huff, s);
@@ -203,13 +225,13 @@ static void dynamic_huffman_block(struct state *s) {
     // construct literal and distance huffman codes
     struct huffman *literal_huff = huffman_construct(dist_and_lit_huffman_lengths, hlit);
     struct huffman *distnce_huff = huffman_construct(dist_and_lit_huffman_lengths + hlit, hdist);
+    huffman_print(distnce_huff);
     free(dist_and_lit_huffman_lengths);
     // read code-by-code
     int literal = huffman_read_next(literal_huff, s);
     while (literal != 256) { // 256 is end of block
         if (literal < 256) {
-            unsigned char x = literal;
-            fwrite(&x, 1, 1, s->dest);
+            write_byte(literal, s);
         } else {
             int repeat_len;
             if (literal <= 268) {
@@ -227,10 +249,13 @@ static void dynamic_huffman_block(struct state *s) {
             } else if (literal <= 284) {
                 // 5 extra bits
                 repeat_len = ((literal - 281) * 32 + 131) + bits(s, 5);
+            } else {
+                // 285 is 258
+                repeat_len = 258;
             }
             // read distance code
             int dist = huffman_read_next(distnce_huff, s);
-            // TODO: actually implement reading back
+            write_repeat(repeat_len, dist, s);
         }
         literal = huffman_read_next(literal_huff, s);
     }
@@ -245,6 +270,7 @@ int decompressor(FILE *dest, FILE *src) {
     s.dest = dest;
     s.bit_buf = 0;
     s.bit_count = 0;
+    s.out_buf_index = 0;
     
     int exception = setjmp(s.except);
     if (exception != 0) {
