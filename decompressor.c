@@ -45,6 +45,7 @@ static void write_byte(unsigned char byte, struct state *s) {
 }
 
 static void write_repeat(int length, int distance, struct state *s) {
+    //printf("\nrepeat len %d distance %d\n", length, distance);
     if (s->out_buf_index < distance) {
         // this could have been a segfault! sheesh
         longjmp(s->except, ERR_INVALID_DEFLATE);
@@ -52,6 +53,7 @@ static void write_repeat(int length, int distance, struct state *s) {
     for (int i = 0; i < length; i++) {
         write_byte(s->out_buf[s->out_buf_index - distance], s);
     }
+    //printf("\nend\n");
 }
 
 static void non_compressed_block(struct state *s) {
@@ -170,39 +172,26 @@ static void read_with_huffman(struct huffman *literal_huff, struct huffman *dist
         if (literal < 256) {
             write_byte(literal, s);
         } else {
-            int repeat_len;
-            if (literal <= 264) {
-                // 0 extra bits
-                repeat_len = (literal - 257) + 3;
-            } else if (literal <= 268) {
-                // 1 extra bit
-                repeat_len = ((literal - 265) * 2 + 11) + bits(s, 1);
-            } else if (literal <= 272) {
-                // 2 extra bits
-                repeat_len = ((literal - 269) * 4 + 19) + bits(s, 2);
-            } else if (literal <= 276) {
-                // 3 extra bits
-                repeat_len = ((literal - 273) * 8 + 35) + bits(s, 3);
-            } else if (literal <= 280) {
-                // 4 extra bits
-                repeat_len = ((literal - 277) * 16 + 67) + bits(s, 4);
-            } else if (literal <= 284) {
-                // 5 extra bits
-                repeat_len = ((literal - 281) * 32 + 131) + bits(s, 5);
-            } else {
-                // 285 is 258
-                repeat_len = 258;
-            }
+            static const short lens[29] = {  // Size base for length codes 257..285
+                3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19, 23, 27, 31,
+                35, 43, 51, 59, 67, 83, 99, 115, 131, 163, 195, 227, 258};
+            static const short lext[29] = {  // Extra bits for length codes 257..285
+                0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2,
+                3, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 0};
+            static const short dists[30] = { // Offset base for distance codes 0..29
+                1, 2, 3, 4, 5, 7, 9, 13, 17, 25, 33, 49, 65, 97, 129, 193,
+                257, 385, 513, 769, 1025, 1537, 2049, 3073, 4097, 6145,
+                8193, 12289, 16385, 24577};
+            static const short dext[30] = {  // Extra bits for distance codes 0..29
+                0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6,
+                7, 7, 8, 8, 9, 9, 10, 10, 11, 11,
+                12, 12, 13, 13};
+            int lit_extra_bits = lext[literal - 257];
+            int repeat_len = lens[literal - 257] + bits(s, lit_extra_bits);
             // read distance code
             int dist = huffman_read_next(distnce_huff, s);
-            int distance_base[] = {5, 7, 9, 13, 17, 25, 33, 49, 65, 97, 129, 193, 257, 385, 513, 769, 1025, 1537, 2049, 3073, 4096, 6145, 8193, 12289, 16385, 24577};
-            if (dist <= 3) {
-                // 0 extra bits
-                dist = dist + 1;
-            } else {
-                int extra_bits = (dist - 2) / 2;
-                dist = distance_base[dist - 4] + bits(s, extra_bits);
-            }
+            int dist_extra_bits = dext[dist];
+            dist = dists[dist] + bits(s, dist_extra_bits);
             write_repeat(repeat_len, dist, s);
         }
         literal = huffman_read_next(literal_huff, s);
@@ -220,7 +209,6 @@ static void dynamic_huffman_block(struct state *s) {
         code_lengths[code_lengths_order[i]] = bits(s, 3);
     }
     struct huffman *code_lengths_huff = huffman_construct(code_lengths, 19);
-    huffman_print(code_lengths_huff);
 
     // read huffman for literal/length alphabet
     // code length repeat codes can cross from hlit to hdist
