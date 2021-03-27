@@ -50,7 +50,7 @@ static void write_repeat(int length, int distance, struct state *s) {
         longjmp(s->except, ERR_INVALID_DEFLATE);
     }
     for (int i = 0; i < length; i++) {
-        write_byte(s->out_buf[s->out_buf_index++ - distance], s);
+        write_byte(s->out_buf[s->out_buf_index - distance], s);
     }
 }
 
@@ -195,6 +195,14 @@ static void read_with_huffman(struct huffman *literal_huff, struct huffman *dist
             }
             // read distance code
             int dist = huffman_read_next(distnce_huff, s);
+            int distance_base[] = {5, 7, 9, 13, 17, 25, 33, 49, 65, 97, 129, 193, 257, 385, 513, 769, 1025, 1537, 2049, 3073, 4096, 6145, 8193, 12289, 16385, 24577};
+            if (dist <= 3) {
+                // 0 extra bits
+                dist = dist + 1;
+            } else {
+                int extra_bits = (dist - 2) / 2;
+                dist = distance_base[dist - 4] + bits(s, extra_bits);
+            }
             write_repeat(repeat_len, dist, s);
         }
         literal = huffman_read_next(literal_huff, s);
