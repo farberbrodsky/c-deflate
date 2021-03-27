@@ -202,7 +202,7 @@ static void dynamic_huffman_block(struct state *s) {
     huffman_free(code_lengths_huff);
     // construct literal and distance huffman codes
     struct huffman *literal_huff = huffman_construct(dist_and_lit_huffman_lengths, hlit);
-    struct huffman *distnce_huff = huffman_construct(dist_and_lit_huffman_lengths, hdist);
+    struct huffman *distnce_huff = huffman_construct(dist_and_lit_huffman_lengths + hlit, hdist);
     free(dist_and_lit_huffman_lengths);
     // read code-by-code
     int literal = huffman_read_next(literal_huff, s);
