@@ -164,6 +164,40 @@ static void huffman_print(struct huffman *huff) {
 }
 #endif
 
+static void read_with_huffman(struct huffman *literal_huff, struct huffman *distnce_huff, struct state *s) {
+    int literal = huffman_read_next(literal_huff, s);
+    while (literal != 256) { // 256 is end of block
+        if (literal < 256) {
+            write_byte(literal, s);
+        } else {
+            int repeat_len;
+            if (literal <= 268) {
+                // 1 extra bit
+                repeat_len = ((literal - 265) * 2 + 11) + bits(s, 1);
+            } else if (literal <= 272) {
+                // 2 extra bits
+                repeat_len = ((literal - 269) * 4 + 19) + bits(s, 2);
+            } else if (literal <= 276) {
+                // 3 extra bits
+                repeat_len = ((literal - 273) * 8 + 35) + bits(s, 3);
+            } else if (literal <= 280) {
+                // 4 extra bits
+                repeat_len = ((literal - 277) * 16 + 67) + bits(s, 4);
+            } else if (literal <= 284) {
+                // 5 extra bits
+                repeat_len = ((literal - 281) * 32 + 131) + bits(s, 5);
+            } else {
+                // 285 is 258
+                repeat_len = 258;
+            }
+            // read distance code
+            int dist = huffman_read_next(distnce_huff, s);
+            write_repeat(repeat_len, dist, s);
+        }
+        literal = huffman_read_next(literal_huff, s);
+    }
+}
+
 static void dynamic_huffman_block(struct state *s) {
     int hlit = 257 + bits(s, 5); // number of Literal/Length codes - 257-286
     int hdist =  1 + bits(s, 5); // number of Distance codes - 1-32
@@ -225,41 +259,36 @@ static void dynamic_huffman_block(struct state *s) {
     // construct literal and distance huffman codes
     struct huffman *literal_huff = huffman_construct(dist_and_lit_huffman_lengths, hlit);
     struct huffman *distnce_huff = huffman_construct(dist_and_lit_huffman_lengths + hlit, hdist);
-    huffman_print(distnce_huff);
     free(dist_and_lit_huffman_lengths);
-    // read code-by-code
-    int literal = huffman_read_next(literal_huff, s);
-    while (literal != 256) { // 256 is end of block
-        if (literal < 256) {
-            write_byte(literal, s);
-        } else {
-            int repeat_len;
-            if (literal <= 268) {
-                // 1 extra bit
-                repeat_len = ((literal - 265) * 2 + 11) + bits(s, 1);
-            } else if (literal <= 272) {
-                // 2 extra bits
-                repeat_len = ((literal - 269) * 4 + 19) + bits(s, 2);
-            } else if (literal <= 276) {
-                // 3 extra bits
-                repeat_len = ((literal - 273) * 8 + 35) + bits(s, 3);
-            } else if (literal <= 280) {
-                // 4 extra bits
-                repeat_len = ((literal - 277) * 16 + 67) + bits(s, 4);
-            } else if (literal <= 284) {
-                // 5 extra bits
-                repeat_len = ((literal - 281) * 32 + 131) + bits(s, 5);
-            } else {
-                // 285 is 258
-                repeat_len = 258;
-            }
-            // read distance code
-            int dist = huffman_read_next(distnce_huff, s);
-            write_repeat(repeat_len, dist, s);
-        }
-        literal = huffman_read_next(literal_huff, s);
-    }
+    read_with_huffman(literal_huff, distnce_huff, s);
     // free unused stuff
+    huffman_free(literal_huff);
+    huffman_free(distnce_huff);
+}
+
+static void static_huffman_block(struct state *s) {
+    // construct huffman
+    int lengths[288];
+    int i;
+    for (i = 0; i < 144; ++i) {
+        lengths[i] = 8;
+    }
+    for (; i < 256; ++i) {
+        lengths[i] = 9;
+    }
+    for (; i < 280; ++i) {
+        lengths[i] = 7;
+    }
+    for (; i < 288; ++i) {
+        lengths[i] = 8;
+    }
+    struct huffman *literal_huff = huffman_construct(lengths, 288);
+    for (i = 0; i < 30; ++i) {
+        lengths[i] = 5;
+    }
+    struct huffman *distnce_huff = huffman_construct(lengths, 30);
+    // read as usual
+    read_with_huffman(literal_huff, distnce_huff, s);
     huffman_free(literal_huff);
     huffman_free(distnce_huff);
 }
@@ -293,6 +322,7 @@ int decompressor(FILE *dest, FILE *src) {
 #ifdef DEFLATE_DEBUGGING
                     printf("static huffman block\n");
 #endif
+                    static_huffman_block(&s);
                     break;
                 case 0b10:
                     // dynamic huffman
