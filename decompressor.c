@@ -1,7 +1,5 @@
 #include "decompressor.h"
-
-#define MAX_CODEBITS 15   // a huffman code can't be more than 15 bits
-#define MAX_CODES    286  // there are only 286 codes encoded
+#include "huffman.h"
 
 struct state {
     FILE *dest;
@@ -69,74 +67,6 @@ static void non_compressed_block(struct state *s) {
     }
 }
 
-// constructs a huffman tree from the lengths
-struct huffman {
-    int value;             // isn't used if left or right aren't null
-    struct huffman *left;  // represented by 0
-    struct huffman *right; // represented by 1
-};
-
-static void huffman_free(struct huffman *huff) {
-    if (huff->left != NULL) {
-        huffman_free(huff->left);
-    }
-    if (huff->right != NULL) {
-        huffman_free(huff->right);
-    }
-    free(huff);
-}
-
-static struct huffman *huffman_construct(int *lengths, int count) {
-    // count the number of codes for each code length
-    int bl_count[MAX_CODES];
-    memset(bl_count, 0, MAX_CODES);
-    for (int i = 0; i < count; i++) {
-        bl_count[lengths[i]] += 1;
-    }
-    bl_count[0] = 0;
-
-    // generate the first code for each length
-    int code = 0;
-    int next_code[MAX_CODES + 1];
-    for (int bits = 1; bits <= MAX_CODEBITS; ++bits) {
-        code = (code + bl_count[bits - 1]) << 1;
-        next_code[bits] = code;
-    }
-
-    // generate the huffman tree
-    struct huffman *tree = calloc(1, sizeof(struct huffman));
-    for (int i = 0; i < count; i++) {
-        int code_len = lengths[i];
-        if (code_len != 0) {
-            uint16_t code = next_code[code_len]++;
-            // we know the code, now we just need to put it on the tree
-            struct huffman *node = tree;
-            // read code bit by bit
-            bool found_first_bit = false;
-            code <<= (16 - lengths[i]);
-            for (int j = 0; j < lengths[i]; j++) {
-                if (code & 0b1000000000000000) {
-                    found_first_bit = true;
-                    // go right
-                    if (node->right == NULL) {
-                        node->right = calloc(1, sizeof(struct huffman));
-                    }
-                    node = node->right;
-                } else {
-                    // go left
-                    if (node->left == NULL) {
-                        node->left = calloc(1, sizeof(struct huffman));
-                    }
-                    node = node->left;
-                }
-                code <<= 1;
-            }
-            node->value = i;
-        }
-    }
-    return tree;
-}
-
 // Reads the next character according to a huffman code
 static int huffman_read_next(struct huffman *huff, struct state *s) {
     while (huff->left || huff->right) {
@@ -149,20 +79,6 @@ static int huffman_read_next(struct huffman *huff, struct state *s) {
     }
     return huff->value;
 }
-
-#ifdef DEFLATE_DEBUGGING
-static void huffman_print(struct huffman *huff) {
-    if (huff == NULL) {
-        printf("null");
-    } else {
-        printf("{\"val\": %d, \"L\": ", huff->value);
-        huffman_print(huff->left);
-        printf(", \"R\": ");
-        huffman_print(huff->right);
-        printf("}");
-    }
-}
-#endif
 
 static void read_with_huffman(struct huffman *literal_huff, struct huffman *distnce_huff, struct state *s) {
     int literal = huffman_read_next(literal_huff, s);
