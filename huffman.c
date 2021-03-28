@@ -1,5 +1,3 @@
-#ifndef GUARD_a29d25b7_0269_4ec8_8102_1c1271374a26
-#define GUARD_a29d25b7_0269_4ec8_8102_1c1271374a26
 #include "huffman.h"
 
 void huffman_free(struct huffman *huff) {
@@ -72,5 +70,4 @@ void huffman_print(struct huffman *huff) {
         printf("}");
     }
 }
-#endif
 #endif

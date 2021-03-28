@@ -10,5 +10,6 @@
 #include <stdbool.h>
 #define MAX_CODEBITS 15   // a huffman code can't be more than 15 bits
 #define MAX_CODES    286  // there are only 286 codes encoded
+#include "compressor.h"
 #include "decompressor.h"
 #endif
