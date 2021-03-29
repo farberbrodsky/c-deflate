@@ -108,9 +108,102 @@ static void find_repetitions(int i, int j, struct state *s) {
     }
 }
 
-// TODO: iterates from s->in_buf_index - i to s->in_buf_index - j, writes it using dynamic huffman
-// TODO: static int dynamic_huffman(int i, int j, char **str, struct state *s) {
-// TODO: }
+// iterates from s->in_buf_index - i to s->in_buf_index - j, writes it using dynamic huffman
+static const int lengths_for_codes[29]   = { 3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19, 23, 27, 31,
+                                             35, 43, 51, 59, 67, 83, 99, 115, 131, 163, 195, 227, 258 };
+static const int lengths_for_repeats[30] = { 1, 2, 3, 4, 5, 7, 9, 13, 17, 25, 33, 49, 65, 97,
+                                             129, 193, 257, 385, 513, 769, 1025, 1537, 2049,
+                                             3073, 4097, 6145, 8193, 12289, 16385, 24577 };
+static void dynamic_huffman(int i, int j, struct state *s) {
+    i = s->in_buf_index - i;
+    j = s->in_buf_index - j;
+    // step 1: choose the best repetitions...
+    // step 2: find how many times each character in 0-285 appears, and every distance code in 1-32,
+    // and calculate hlit (number of literal/length codes) and hdist (number of distance codes)
+    int hlit = 0;
+    int hdist = 0;
+    int dist_and_lit_huffman_appearances[286 + 32] = {0};
+    for (; i < j; i++) {
+        int replen = s->repetition_len[i];
+        if (replen != 0) {
+            // find correct repeat code with binary search
+            int L = 0;
+            int R = 30;
+            while (L != R) {
+                int mid = L + (R - L) / 2;
+                if (replen < lengths_for_repeats[mid]) {
+                    R = mid;
+                } else {
+                    L = mid + 1;
+                }
+            }
+            dist_and_lit_huffman_appearances[286 + L - 1] += 1;
+            if ((L - 1 + 1) > hdist) {
+                hdist = L - 1 + 1; // if we have L-1=3, then ther are 4 different distance codes
+            }
+            // find correct length code with binary search
+            L = 0;
+            R = 29;
+            while (L != R) {
+                int mid = L + (R - L) / 2;
+                if (replen < lengths_for_codes[mid]) {
+                    R = mid;
+                } else {
+                    L = mid + 1;
+                }
+            }
+            dist_and_lit_huffman_appearances[257 + L - 1] += 1;
+            if ((L - 1 + 1) > hlit) {
+                hlit = L - 1 + 1; // if we have L-1=257, then there are 258 different characters
+            }
+        } else {
+            dist_and_lit_huffman_appearances[s->in_buf[i]] += 1;
+        }
+    }
+    // step 3: encode this efficiently with repetitions
+    // move dist_and_lit_huffman_appearances so distances are right after literals
+    memmove(dist_and_lit_huffman_appearances + hlit, dist_and_lit_huffman_appearances + 286, 32);
+    int dist_and_lit_huffman_repetitions[286 + 32] = {0};
+    int dalhr_i = 0;
+    for (int x = 0; x < hlit + hdist + 258;) {
+        // look for a repetition of the previous code length
+        if (dist_and_lit_huffman_appearances[x] == 0) {
+            int repeat_len = 0;
+            while (dist_and_lit_huffman_appearances[x + repeat_len] == 0 && repeat_len < 138) {
+                repeat_len += 1;
+            }
+            if (repeat_len >= 3) {
+                // this is a repetition
+                x += repeat_len;
+                if (x > 0 && dist_and_lit_huffman_appearances[x - 1] == 0 && repeat_len <= 6) {
+                    dist_and_lit_huffman_repetitions[dalhr_i++] = (16 << 7) | (repeat_len - 3);
+                } else if (repeat_len <= 10) {
+                    dist_and_lit_huffman_repetitions[dalhr_i++] = (17 << 7) | (repeat_len - 3);
+                } else {
+                    dist_and_lit_huffman_repetitions[dalhr_i++] = (18 << 7) | (repeat_len - 11);
+                }
+            } else {
+                dist_and_lit_huffman_repetitions[dalhr_i++] = dist_and_lit_huffman_appearances[x++];
+            }
+        } else if (x > 0) {
+            int prev = dist_and_lit_huffman_appearances[x - 1];
+            int repeat_len = 0;
+            while (dist_and_lit_huffman_appearances[x + repeat_len] == prev && repeat_len < 6) {
+                repeat_len += 1;
+            }
+            if (repeat_len >= 3) {
+                // this is a repetition
+                x += repeat_len;
+                dist_and_lit_huffman_repetitions[dalhr_i++] = (16 << 7) | (repeat_len - 3);
+            } else {
+                dist_and_lit_huffman_repetitions[dalhr_i++] = dist_and_lit_huffman_appearances[x++];
+            }
+        } else {
+            dist_and_lit_huffman_repetitions[dalhr_i++] = dist_and_lit_huffman_appearances[x++];
+        }
+    }
+    // step 4: construct huffman code...
+}
 
 int compressor(FILE *dest, FILE *src) {
     struct state *s = malloc(sizeof(struct state));
@@ -127,6 +220,7 @@ int compressor(FILE *dest, FILE *src) {
         if (s->eof) {
             // file ended already :(
             find_repetitions(s->in_buf_index, 0, s);
+            dynamic_huffman(s->in_buf_index, 0, s);
         }
     }
 
