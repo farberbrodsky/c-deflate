@@ -34,12 +34,12 @@ static int bits(struct state *s, int count) {
 
 static void write_byte(unsigned char byte, struct state *s) {
     fwrite(&byte, 1, 1, s->dest);
-    if (s->out_buf_index == 65535) {
+    s->out_buf[s->out_buf_index++] = byte;
+    if (s->out_buf_index == 65536) {
         // move everything 32768 bytes
         memmove(s->out_buf, s->out_buf + 32768, 32768);
         s->out_buf_index -= 32768;
     }
-    s->out_buf[s->out_buf_index++] = byte;
 }
 
 static void write_repeat(int length, int distance, struct state *s) {
