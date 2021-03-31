@@ -1,6 +1,8 @@
 #include "deflate.h"
 
-int main() {
-    // return decompressor(stdout, stdin);
-    return compressor(stdout, stdin);
+int main(int argc, char **argv) {
+    if (!strcmp(argv[1], "compress")) {
+        return compressor(stdout, stdin);
+    }
+    return decompressor(stdout, stdin);
 }

@@ -18,7 +18,7 @@ struct state {
 
 static void write_bits(int bits, int count, struct state *s) {
     unsigned long bit_buf = s->bit_buf;
-    bit_buf = (bit_buf << count) | bits;
+    bit_buf = bit_buf | (bits << s->bit_count);
     s->bit_count += count;
     while (s->bit_count >= 8) {
         // write a byte
@@ -108,12 +108,32 @@ static void find_repetitions(int i, int j, struct state *s) {
     }
 }
 
+static int binary_search(const int *arr, int R, int x) {
+    int L = 0;
+    while (L != R) {
+        int mid = L + (R - L) / 2;
+        if (x < arr[mid]) {
+            R = mid;
+        } else {
+            L = mid + 1;
+        }
+    }
+    return L - 1;
+}
+
 // iterates from s->in_buf_index - i to s->in_buf_index - j, writes it using dynamic huffman
 static const int lengths_for_codes[29]   = { 3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19, 23, 27, 31,
                                              35, 43, 51, 59, 67, 83, 99, 115, 131, 163, 195, 227, 258 };
 static const int lengths_for_repeats[30] = { 1, 2, 3, 4, 5, 7, 9, 13, 17, 25, 33, 49, 65, 97,
                                              129, 193, 257, 385, 513, 769, 1025, 1537, 2049,
                                              3073, 4097, 6145, 8193, 12289, 16385, 24577 };
+static const short lengths_extra_bits[29] = {
+    0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2,
+    3, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 0};
+static const short dist_extra_bits[30] = {
+    0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6,
+    7, 7, 8, 8, 9, 9, 10, 10, 11, 11,
+    12, 12, 13, 13};
 static void dynamic_huffman(int i, int j, struct state *s) {
     i = s->in_buf_index - i;
     j = s->in_buf_index - j;
@@ -126,35 +146,17 @@ static void dynamic_huffman(int i, int j, struct state *s) {
     for (; i < j; i++) {
         int replen = s->repetition_len[i];
         if (replen != 0) {
-            // find correct repeat code with binary search
-            int L = 0;
-            int R = 30;
-            while (L != R) {
-                int mid = L + (R - L) / 2;
-                if (replen < lengths_for_repeats[mid]) {
-                    R = mid;
-                } else {
-                    L = mid + 1;
-                }
-            }
-            dist_and_lit_huffman_appearances[286 + L - 1] += 1;
-            if ((L - 1 + 1) > hdist) {
-                hdist = L - 1 + 1; // if we have L-1=3, then ther are 4 different distance codes
-            }
             // find correct length code with binary search
-            L = 0;
-            R = 29;
-            while (L != R) {
-                int mid = L + (R - L) / 2;
-                if (replen < lengths_for_codes[mid]) {
-                    R = mid;
-                } else {
-                    L = mid + 1;
-                }
+            int lit = binary_search(lengths_for_codes, 29, replen);
+            dist_and_lit_huffman_appearances[257 + lit] += 1;
+            if ((lit + 1) > hlit) {
+                hlit = lit + 1;
             }
-            dist_and_lit_huffman_appearances[257 + L - 1] += 1;
-            if ((L - 1 + 1) > hlit) {
-                hlit = L - 1 + 1; // if we have L-1=257, then there are 258 different characters
+            // find correct repeat code with binary search
+            int dist = binary_search(lengths_for_repeats, 30, s->repetition_dist[i]);
+            dist_and_lit_huffman_appearances[286 + dist] += 1;
+            if ((dist + 1) > hdist) {
+                hdist = dist + 1;
             }
         } else {
             dist_and_lit_huffman_appearances[s->in_buf[i]] += 1;
@@ -205,6 +207,46 @@ static void dynamic_huffman(int i, int j, struct state *s) {
     // step 4: construct huffman code...
 }
 
+// iterates from s->in_buf_index - i to s->in_buf_index - j, writes it using fixed huffman
+static void fixed_huffman(int i, int j, struct state *s) {
+    i = s->in_buf_index - i;
+    j = s->in_buf_index - j;
+    write_bits(0b01, 2, s); // header
+    while (i < j) {
+        int replen = s->repetition_len[i];
+        if (replen == 0) {
+            // write character as-is
+            int lit = s->in_buf[i];
+            if (lit <= 143) {
+                // 8 bits - 00110000 through 10111111
+                write_bits(0b0011000 + lit, 8, s);
+            } else {
+                // 9 bits - 110010000 through 111111111
+                write_bits(0b110010000 + lit, 9, s);
+            }
+            i += 1;
+        } else {
+            // write this repetition
+            int dist = s->repetition_dist[i];
+            int lencode = 257 + binary_search(lengths_for_codes, 29, replen);
+            if (lencode <= 279) {
+                // 7 bits - 0000000 through 0010111
+                write_bits(lencode - 256, 7, s);
+            } else {
+                // 8 bits - 11000000 through 11000111
+                write_bits(0b11000000 + lencode - 280, 8, s);
+            }
+            // write extra bits based on lencode
+            write_bits(replen - lengths_for_codes[lencode - 257], lengths_extra_bits[lencode], s);
+            int distcode = 1 + binary_search(lengths_for_repeats, 30, dist);
+            write_bits(distcode, 5, s);
+            write_bits(dist - lengths_for_repeats[distcode - 1], lengths_extra_bits[distcode], s);
+            i += replen;
+        }
+    }
+    write_bits(0, 7, s); // 256
+}
+
 int compressor(FILE *dest, FILE *src) {
     struct state *s = malloc(sizeof(struct state));
     s->src = src;
@@ -220,7 +262,10 @@ int compressor(FILE *dest, FILE *src) {
         if (s->eof) {
             // file ended already :(
             find_repetitions(s->in_buf_index, 0, s);
-            dynamic_huffman(s->in_buf_index, 0, s);
+            // last chunk bit
+            write_bits(1, 1, s);
+            fixed_huffman(s->in_buf_index, 0, s);
+            break;
         }
     }
 

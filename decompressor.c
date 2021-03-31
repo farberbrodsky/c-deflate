@@ -170,7 +170,7 @@ static void dynamic_huffman_block(struct state *s) {
     huffman_free(distnce_huff);
 }
 
-static void static_huffman_block(struct state *s) {
+static void fixed_huffman_block(struct state *s) {
     // construct huffman
     int lengths[288];
     int i;
@@ -214,7 +214,7 @@ int decompressor(FILE *dest, FILE *src) {
         // first bit - whether this is the final block
         while (is_last == 0) {
             is_last = bits(&s, 1);
-            // next 2 bits - whether this block is non-compressed, static huffman or dynamic huffman
+            // next 2 bits - whether this block is non-compressed, fixed huffman or dynamic huffman
             int block_type = bits(&s, 2);
             switch (block_type) {
                 case 0b00:
@@ -222,11 +222,11 @@ int decompressor(FILE *dest, FILE *src) {
                     non_compressed_block(&s);
                     break;
                 case 0b01:
-                    // static huffman
+                    // fixed huffman
 #ifdef DEFLATE_DEBUGGING
-                    printf("static huffman block\n");
+                    printf("fixed huffman block\n");
 #endif
-                    static_huffman_block(&s);
+                    fixed_huffman_block(&s);
                     break;
                 case 0b10:
                     // dynamic huffman
